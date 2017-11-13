@@ -135,7 +135,7 @@ class Train(object):
             flag2 = 1  # if epoch>10 else 0
             for idx in range(iters):
                 start_t = time.time()
-                flag = 1 if idx<2 else 0 # set we use 500 train data with label.
+                flag = 1 if idx<args.label_num else 0 # set we use 500 train data with label.
                 batchx, batchl = mnist.train.next_batch(self.batch_size)
                 # batchx, batchl = self.sess.run([batchx, batchl])
                 g_opt = [self.opt_g, self.g_loss]
