@@ -1,0 +1,2 @@
+model_checkpoint_path: "/home/liu/Tensorflow/GAN~/wgan/model_saved/model.ckpt"
+all_model_checkpoint_paths: "/home/liu/Tensorflow/GAN~/wgan/model_saved/model.ckpt"

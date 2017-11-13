@@ -1,0 +1,241 @@
+#coding:utf-8
+from glob import glob
+from PIL import Image
+import matplotlib.pyplot as plt
+import scipy.misc as scm
+from vlib.layers import *
+import tensorflow as tf
+import numpy as np
+from vlib.load_data import *
+import os
+import vlib.plot as plot
+import vlib.my_extract as dataload
+import vlib.save_images as save_img
+import time
+from tensorflow.examples.tutorials.mnist import input_data #as mnist_data
+mnist = input_data.read_data_sets('data/', one_hot=True)
+# temp = 0.89
+class Train(object):
+    def __init__(self, sess, args):
+        #sess=tf.Session()
+        self.sess = sess
+        self.img_size = 28   # the size of image
+        self.trainable = True
+        self.batch_size = 100  # must be even number
+        self.lr = 0.0002
+        self.mm = 0.5      # momentum term for adam
+        self.z_dim = 128   # the dimension of noise z
+        self.EPOCH = 50    # the number of max epoch
+        self.LAMBDA = 0.1  # parameter of WGAN-GP
+        self.model = args.model  # 'DCGAN' or 'WGAN'
+        self.dim = 1       # RGB is different with gray pic
+        self.num_class = 11
+        self.load_model = args.load_model
+        self.build_model()  # initializer
+
+    def build_model(self):
+        # build  placeholders
+        self.x = tf.placeholder(tf.float32, shape=[self.batch_size, self.img_size*self.img_size*self.dim], name='real_img')
+        self.z = tf.placeholder(tf.float32, shape=[self.batch_size, self.z_dim], name='noise')
+        self.label = tf.placeholder(tf.float32, shape=[self.batch_size, self.num_class-1], name='label')
+        self.flag = tf.placeholder(tf.float32, shape=[], name='flag')
+        self.flag2 = tf.placeholder(tf.float32, shape=[], name='flag2')
+        # define the network
+        self.G_img = self.generator('gen', self.z, reuse=False)
+        ximg = tf.reshape(self.x, (self.batch_size, self.img_size, self.img_size, self.dim))
+        d_in = tf.concat([ximg, self.G_img], axis=0)
+
+        self.D_logits_, self.D_out_ = self.discriminator('dis', d_in, reuse=False)
+
+        self.D_logits, self.D_logits_f = tf.split(self.D_logits_, [self.batch_size, self.batch_size], axis=0)
+
+        d_regular = tf.add_n(tf.get_collection('regularizer', 'dis'), 'loss')
+
+        #caculate the supervised loss
+        batch_gl = tf.zeros_like(self.label, dtype=tf.float32)
+        batchl_ = tf.concat([self.label, tf.zeros([self.batch_size, 1])], axis=1)
+        batch_gl = tf.concat([batch_gl, tf.ones([self.batch_size, 1])], axis=1)
+        batchl = tf.concat([batchl_, batch_gl], axis=0)*0.9  # one side label smoothing
+
+        s_l = tf.losses.softmax_cross_entropy(onehot_labels=batchl, logits=self.D_logits_, label_smoothing=None)
+        #caculate the unsupervised loss
+        s_logits_ = tf.nn.softmax(self.D_logits_)
+        # un_s = 1 - tf.reduce_sum(s_logits_[:self.batch_size, :-1])/(tf.reduce_sum(s_logits_[:self.batch_size,:])) \
+        #       + tf.reduce_sum(s_logits_[self.batch_size:,-1])/tf.reduce_sum(s_logits_[self.batch_size:,:]) # maxmuim z(x)/(1+z(x)) which in paper
+        un_s = tf.reduce_sum(s_logits_[:self.batch_size, -1])/(tf.reduce_sum(s_logits_[:self.batch_size,:])) \
+                + tf.reduce_sum(s_logits_[self.batch_size:,:-1])/tf.reduce_sum(s_logits_[self.batch_size:,:])
+        # caculate the unsupervised loss
+        f_match = tf.constant(0., dtype=tf.float32)
+        for i in range(4):
+            d_layer, d_glayer = tf.split(self.D_out_[i], [self.batch_size, self.batch_size], axis=0)
+            f_match += tf.nn.l2_loss(tf.subtract(d_layer, d_glayer))
+        if self.model=='WGAN-GP':
+            self.g_loss = tf.reduce_mean(self.D_logits_f[:,-1]) + f_match*0.01*self.flag2
+            disc_cost = -tf.reduce_mean(self.D_logits_f[:,-1]) + tf.reduce_mean(self.D_logits[:,-1])
+
+            alpha = tf.random_uniform(shape=[self.batch_size, 1], minval=0., maxval=1.)
+            differences = self.G_img - ximg
+            differences = tf.reshape(differences, (self.batch_size, self.img_size**2*self.dim))
+            interpolates = ximg + tf.reshape((alpha * differences), (self.batch_size, self.img_size, self.img_size, self.dim))
+            D_logits, _ = self.discriminator('dis', interpolates, reuse=True)
+            gradients = tf.gradients(D_logits[:,-1], [interpolates])[0]
+            slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1]))
+            gradient_penalty = tf.reduce_mean((slopes - 1.) ** 2)
+            self.d_l_1, self.d_l_2, self.d_l_3 = disc_cost + self.LAMBDA * gradient_penalty, self.flag*s_l, (1-self.flag)*un_s
+            # self.d_loss = (disc_cost + self.LAMBDA * gradient_penalty) + d_regular + self.flag*s_l + (1-self.flag)*un_s
+            self.d_loss = 0.1*self.d_l_1 + self.d_l_2 + self.d_l_3 + d_regular
+        elif self.model=='DCGAN':
+            self.d_loss_real = tf.losses.softmax_cross_entropy(onehot_labels=batchl_*0.9, logits=self.D_logits)
+            self.d_loss_fake = tf.losses.softmax_cross_entropy(onehot_labels=batch_gl*0.9, logits=self.D_logits_f)
+            self.g_loss = self.d_loss_fake + f_match*0.01*self.flag2
+            self.d_l_1, self.d_l_2, self.d_l_3 = self.d_loss_fake + self.d_loss_real, self.flag*s_l, (1-self.flag)*un_s
+            self.d_loss = self.d_l_1 + self.d_l_2 + self.d_l_3
+        else:
+            print 'model must be DCGAN or WGAN-GP!'
+            return
+        all_vars = tf.global_variables()
+        g_vars = [v for v in all_vars if 'gen' in v.name]
+        d_vars = [v for v in all_vars if 'dis' in v.name]
+
+        if self.model == 'DCGAN':
+            self.opt_d = tf.train.AdamOptimizer(self.lr, beta1=self.mm).minimize(self.d_loss, var_list=d_vars)
+            self.opt_g = tf.train.AdamOptimizer(self.lr, beta1=self.mm).minimize(self.g_loss, var_list=g_vars)
+        elif self.model == 'WGAN_GP':
+            self.opt_d = tf.train.AdamOptimizer(1e-5, beta1=0.5, beta2=0.9).minimize(self.d_loss, var_list=d_vars)
+            self.opt_g = tf.train.AdamOptimizer(1e-5, beta1=0.5, beta2=0.9).minimize(self.g_loss, var_list=g_vars)
+        else:
+            print ('model can only be "DCGAN","WGAN_GP" !')
+            return
+        test_logits, _ = self.discriminator('dis', self.x, reuse=True)
+        test_logits = tf.nn.softmax(test_logits)
+        self.prediction = tf.nn.in_top_k(test_logits, tf.argmax(batchl_, axis=1), 1)
+
+        self.saver = tf.train.Saver()
+
+        if not self.load_model:
+            init = tf.global_variables_initializer()
+            self.sess.run(init)
+        elif self.load_model:
+            self.saver.restore(self.sess, os.getcwd()+'/model_saved/model.ckpt')
+            print 'model load done'
+        self.sess.graph.finalize()
+
+    def train(self):
+        if not os.path.exists('model_saved'):
+            os.mkdir('model_saved')
+        if not os.path.exists('gen_picture'):
+            os.mkdir('gen_picture')
+        data_dir = os.getcwd() + '/64_crop'
+        # '/home/liu/Tensorflow/GAN~/dcgan/64_crop'
+        noise = np.random.normal(-1, 1, [self.batch_size, 128])
+        temp = 0.89
+        for epoch in range(self.EPOCH):
+            # iters = int(156191//self.batch_size)
+            iters = 500
+            flag2 = 1  # if epoch>10 else 0
+            for idx in range(iters):
+                start_t = time.time()
+                flag = 1 if idx<2 else 0 # set we use 500 train data with label.
+                batchx, batchl = mnist.train.next_batch(self.batch_size)
+                # batchx, batchl = self.sess.run([batchx, batchl])
+                g_opt = [self.opt_g, self.g_loss]
+                d_opt = [self.opt_d, self.d_loss, self.d_l_1, self.d_l_2, self.d_l_3]
+                feed = {self.x:batchx, self.z:noise, self.label:batchl, self.flag:flag, self.flag2:flag2}
+                # update the Discrimater k times
+                # for i in range(4):
+                # _ = self.sess.run(self.opt_d, feed_dict=feed)
+                _, loss_d, d1,d2,d3 = self.sess.run(d_opt, feed_dict=feed)
+                # update the Generator one time
+                _, loss_g = self.sess.run(g_opt, feed_dict=feed)
+
+                print ("[%3f][epoch:%2d/%2d][iter:%4d/%4d],loss_d:%5f,loss_g:%4f, d1:%4f, d2:%4f, d3:%4f"%
+                       (time.time()-start_t, epoch, self.EPOCH,idx,iters, loss_d, loss_g,d1,d2,d3 )), 'flag:',flag
+
+                plot.plot('d_loss', loss_d)
+                plot.plot('g_loss', loss_g)
+                if ((idx+1) % 100) == 0:  # flush plot picture per 1000 iters
+                    plot.flush()
+                plot.tick()
+
+                if (idx+1)%500==0:
+                    print ('images saving............')
+                    img = self.sess.run(self.G_img, feed_dict=feed)
+                    save_img.save_images(img, os.getcwd()+'/gen_picture/'+'sample{}_{}.jpg'\
+                                         .format(epoch, (idx+1)/500))
+                    print 'images save done'
+            test_acc = self.test()
+            plot.plot('test acc', test_acc)
+            plot.flush()
+            plot.tick()
+            print 'test acc:{}'.format(test_acc), 'temp:%3f'%(temp)
+            if test_acc > temp:
+                print ('model saving..............')
+                path = os.getcwd() + '/model_saved'
+                save_path = os.path.join(path, "model.ckpt")
+                self.saver.save(self.sess, save_path=save_path)
+                print ('model saved...............')
+                temp = test_acc
+
+# output = conv2d('Z_cona{}'.format(i), output, 3, 64, stride=1, padding='SAME')
+
+    def generator(self,name, noise, reuse):
+        with tf.variable_scope(name,reuse=reuse):
+            l = self.batch_size
+            output = fc('g_dc', noise, 2*2*64)
+            output = tf.reshape(output, [-1, 2, 2, 64])
+            output = tf.nn.relu(self.bn('g_bn1',output))
+            output = deconv2d('g_dcon1',output,5,outshape=[l, 4, 4, 64*4])
+            output = tf.nn.relu(self.bn('g_bn2',output))
+
+            output = deconv2d('g_dcon2', output, 5, outshape=[l, 8, 8, 64 * 2])
+            output = tf.nn.relu(self.bn('g_bn3', output))
+
+            output = deconv2d('g_dcon3', output, 5, outshape=[l, 16, 16,64 * 1])
+            output = tf.nn.relu(self.bn('g_bn4', output))
+
+            output = deconv2d('g_dcon4', output, 5, outshape=[l, 32, 32, self.dim])
+            output = tf.image.resize_images(output, (28, 28))
+            # output = tf.nn.relu(self.bn('g_bn4', output))
+            return tf.nn.tanh(output)
+
+    def discriminator(self, name, inputs, reuse):
+        l = tf.shape(inputs)[0]
+        inputs = tf.reshape(inputs, (l,self.img_size,self.img_size,self.dim))
+        with tf.variable_scope(name,reuse=reuse):
+            out = []
+            output = conv2d('d_con1',inputs,5, 64, stride=2, padding='SAME') #14*14
+            output1 = lrelu(self.bn('d_bn1',output))
+            out.append(output1)
+            # output1 = tf.contrib.keras.layers.GaussianNoise
+            output = conv2d('d_con2', output1, 3, 64*2, stride=2, padding='SAME')#7*7
+            output2 = lrelu(self.bn('d_bn2', output))
+            out.append(output2)
+            output = conv2d('d_con3', output2, 3, 64*4, stride=1, padding='VALID')#5*5
+            output3 = lrelu(self.bn('d_bn3', output))
+            out.append(output3)
+            output = conv2d('d_con4', output3, 3, 64*4, stride=2, padding='VALID')#2*2
+            output4 = lrelu(self.bn('d_bn4', output))
+            out.append(output4)
+            output = tf.reshape(output4, [l, 2*2*64*4])# 2*2*64*4
+            output = fc('d_fc', output, self.num_class)
+            # output = tf.nn.softmax(output)
+            return output, out
+
+    def bn(self, name, input):
+        val = tf.contrib.layers.batch_norm(input, decay=0.9,
+                                           updates_collections=None,
+                                           epsilon=1e-5,
+                                           scale=True,
+                                           is_training=True,
+                                           scope=name)
+        return val
+
+    # def get_loss(self, logits, layer_out):
+    def test(self):
+        count = 0.
+        print 'testing................'
+        for i in range(10000//self.batch_size):
+            testx, textl = mnist.test.next_batch(self.batch_size)
+            prediction = self.sess.run(self.prediction, feed_dict={self.x:testx, self.label:textl})
+            count += np.sum(prediction)
+        return count/10000.
