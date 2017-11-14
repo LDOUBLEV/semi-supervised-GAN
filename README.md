@@ -9,5 +9,5 @@ This project is a Tensorflow implemention of semi-supervised which described in 
 `python main.py --model=DCGAN --trainable=True --load_model=False 
  `
 ## test 
-`python main.py --model=DCGAN  --trainable=False  --load_model=False 
+`python main.py --model=DCGAN  --trainable=False  --load_model=True 
                 `
