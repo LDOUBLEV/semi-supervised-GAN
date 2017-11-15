@@ -23,7 +23,7 @@ def conv2d(name, tensor, ksize, out_dim, stride=2, sted=True, padding='SAME'):
         tf.add_to_collection('regularizer', tf.contrib.layers.l2_regularizer(regular_num)(w))
         var = tf.nn.conv2d(tensor, w, [1, stride, stride, 1], padding=padding)
         b = tf.get_variable('bias', [out_dim], 'float32', initializer=tf.constant_initializer(0.))
-        tf.add_to_collection('regularizer', tf.contrib.layers.l2_regularizer(regular_num)(b))
+        #tf.add_to_collection('regularizer', tf.contrib.layers.l2_regularizer(regular_num)(b))
         return tf.nn.bias_add(var, b)
 
 
@@ -48,7 +48,7 @@ def deconv2d(name, tensor, ksize, outshape, stride=2, sted=True, padding='SAME')
         tf.add_to_collection('regularizer', tf.contrib.layers.l2_regularizer(regular_num)(w))
         var = tf.nn.conv2d_transpose(tensor, w, outshape, strides=[1, stride, stride, 1], padding=padding)
         b = tf.get_variable('bias', [outshape[-1]], 'float32', initializer=tf.constant_initializer(0.))
-        tf.add_to_collection('regularizer', tf.contrib.layers.l2_regularizer(regular_num)(b))
+        #tf.add_to_collection('regularizer', tf.contrib.layers.l2_regularizer(regular_num)(b))
         return tf.nn.bias_add(var, b)
 
 def fc(name,value, output_shape):
@@ -64,7 +64,7 @@ def fc(name,value, output_shape):
         w = tf.get_variable('weight', validate_shape=True, dtype=tf.float32,initializer=weight_val)
         tf.add_to_collection('regularizer', tf.contrib.layers.l2_regularizer(regular_num)(w))
         b = tf.get_variable('bias', [output_shape], dtype=tf.float32, initializer=tf.constant_initializer(0.0))
-        tf.add_to_collection('regularizer', tf.contrib.layers.l2_regularizer(regular_num)(b))
+        #tf.add_to_collection('regularizer', tf.contrib.layers.l2_regularizer(regular_num)(b))
         return tf.matmul(value, w) + b
 
 
