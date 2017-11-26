@@ -85,8 +85,10 @@ class Train(object):
             # self.d_loss = (disc_cost + self.LAMBDA * gradient_penalty) + d_regular + self.flag*s_l + (1-self.flag)*un_s
             self.d_loss = 0.1*self.d_l_1 + self.d_l_2 + self.d_l_3 + d_regular
         elif self.model=='DCGAN':
-            self.d_loss_real = tf.losses.softmax_cross_entropy(onehot_labels=batchl_*0.9, logits=self.D_logits)
-            self.d_loss_fake = tf.losses.softmax_cross_entropy(onehot_labels=batch_gl*0.9, logits=self.D_logits_f)
+            #self.d_loss_real = tf.losses.softmax_cross_entropy(onehot_labels=batchl_*0.9, logits=self.D_logits)
+            #self.d_loss_fake = tf.losses.softmax_cross_entropy(onehot_labels=batch_gl*0.9, logits=self.D_logits_f)
+            self.d_loss_real = -tf.log(tf.reduce_sum(s_logits_[:self.batch_size, :-1])/tf.reduce_sum(s_logits_[:self.batch_size, :]))
+            self.d_loss_fake = -tf.log(tf.reduce_sum(s_logits_[self.batch_size:, -1])/tf.reduce_sum(s_logits_[self.batch_size:, :]))
             self.g_loss = self.d_loss_fake + f_match*0.01*self.flag2
             self.d_l_1, self.d_l_2, self.d_l_3 = self.d_loss_fake + self.d_loss_real, self.flag*s_l, (1-self.flag)*un_s
             self.d_loss = self.d_l_1 + self.d_l_2 + self.d_l_3
