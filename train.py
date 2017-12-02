@@ -68,7 +68,7 @@ class Train(object):
         f_match = tf.constant(0., dtype=tf.float32)
         for i in range(4):
             d_layer, d_glayer = tf.split(self.D_out_[i], [self.batch_size, self.batch_size], axis=0)
-            f_match += tf.nn.l2_loss(tf.subtract(d_layer, d_glayer))
+            f_match += tf.reduce_mean(tf.multiply(tf.subtract(d_layer, d_glayer)，tf.subtract(d_layer, d_glayer)))
         if self.model=='WGAN-GP':
             self.g_loss = tf.reduce_mean(self.D_logits_f[:,-1]) + f_match*0.01*self.flag2
             disc_cost = -tf.reduce_mean(self.D_logits_f[:,-1]) + tf.reduce_mean(self.D_logits[:,-1])
