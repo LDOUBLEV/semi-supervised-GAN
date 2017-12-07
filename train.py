@@ -110,6 +110,10 @@ class Train(object):
             return
         test_logits, _ = self.discriminator('dis', self.x, reuse=True)
         test_logits = tf.nn.softmax(test_logits)
+        temp = tf.reshape(test_logits[:, -1],shape=[self.batch_size, 1])
+        for i in range(10):
+            temp = tf.concat([temp, tf.reshape(test_logits[:, -1],shape=[self.batch_size, 1])], axis=1)
+        test_logits -= temp
         self.prediction = tf.nn.in_top_k(test_logits, tf.argmax(batchl_, axis=1), 1)
 
         self.saver = tf.train.Saver()
