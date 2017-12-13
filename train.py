@@ -21,7 +21,7 @@ class Train(object):
         self.sess = sess
         self.img_size = 28   # the size of image
         self.trainable = True
-        self.batch_size = 100  # must be even number
+        self.batch_size = 50  # must be even number
         self.lr = 0.0002
         self.mm = 0.5      # momentum term for adam
         self.z_dim = 128   # the dimension of noise z
@@ -35,70 +35,44 @@ class Train(object):
 
     def build_model(self):
         # build  placeholders
-        self.x = tf.placeholder(tf.float32, shape=[self.batch_size, self.img_size*self.img_size*self.dim], name='real_img')
+        self.x=tf.placeholder(tf.float32,shape=[self.batch_size,self.img_size*self.img_size*self.dim],name='real_img')
         self.z = tf.placeholder(tf.float32, shape=[self.batch_size, self.z_dim], name='noise')
-        self.label = tf.placeholder(tf.float32, shape=[self.batch_size, self.num_class-1], name='label')
+        self.label = tf.placeholder(tf.float32, shape=[self.batch_size, self.num_class - 1], name='label')
         self.flag = tf.placeholder(tf.float32, shape=[], name='flag')
         self.flag2 = tf.placeholder(tf.float32, shape=[], name='flag2')
+
         # define the network
         self.G_img = self.generator('gen', self.z, reuse=False)
-        ximg = tf.reshape(self.x, (self.batch_size, self.img_size, self.img_size, self.dim))
-        d_in = tf.concat([ximg, self.G_img], axis=0)
+        d_logits_r, layer_out_r = self.discriminator('dis', self.x, reuse=False)
+        d_logits_f, layer_out_f = self.discriminator('dis', self.G_img, reuse=True)
 
-        self.D_logits_, self.D_out_ = self.discriminator('dis', d_in, reuse=False)
-
-        self.D_logits, self.D_logits_f = tf.split(self.D_logits_, [self.batch_size, self.batch_size], axis=0)
-
-        d_regular = tf.add_n(tf.get_collection('regularizer', 'dis'), 'loss')
-
-        #caculate the supervised loss
-        batch_gl = tf.zeros_like(self.label, dtype=tf.float32)
-        batchl_ = tf.concat([self.label, tf.zeros([self.batch_size, 1])], axis=1)
-        batch_gl = tf.concat([batch_gl, tf.ones([self.batch_size, 1])], axis=1)
-        batchl = tf.concat([batchl_, batch_gl], axis=0)*0.9  # one side label smoothing
-
-        s_l = tf.losses.softmax_cross_entropy(onehot_labels=batchl, logits=self.D_logits_, label_smoothing=None)
-        #caculate the unsupervised loss
-        s_logits_ = tf.nn.softmax(self.D_logits_)
-        # un_s = 1 - tf.reduce_sum(s_logits_[:self.batch_size, :-1])/(tf.reduce_sum(s_logits_[:self.batch_size,:])) \
-        #       + tf.reduce_sum(s_logits_[self.batch_size:,-1])/tf.reduce_sum(s_logits_[self.batch_size:,:]) # maxmuim z(x)/(1+z(x)) which in paper
-        un_s = tf.reduce_sum(s_logits_[:self.batch_size, -1])/(tf.reduce_sum(s_logits_[:self.batch_size,:])) \
-                + tf.reduce_sum(s_logits_[self.batch_size:,:-1])/tf.reduce_sum(s_logits_[self.batch_size:,:])
+        d_regular = tf.add_n(tf.get_collection('regularizer', 'dis'), 'loss')  # D regular loss
         # caculate the unsupervised loss
+        un_label_r = tf.concat([tf.ones_like(self.label), tf.zeros(shape=(self.batch_size, 1))], axis=1)
+        un_label_f = tf.concat([tf.zeros_like(self.label), tf.ones(shape=(self.batch_size, 1))], axis=1)
+        logits_r, logits_f = tf.nn.softmax(d_logits_r), tf.nn.softmax(d_logits_f)
+        d_loss_r = -tf.log(tf.reduce_sum(logits_r[:, :-1])/tf.reduce_sum(logits_r[:,:]))
+        d_loss_f = -tf.log(tf.reduce_sum(logits_f[:, -1])/tf.reduce_sum(logits_f[:,:]))
+        # d_loss_r = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=un_label_r*0.9, logits=d_logits_r))
+        # d_loss_f = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=un_label_f*0.9, logits=d_logits_f))
+        # feature match
         f_match = tf.constant(0., dtype=tf.float32)
         for i in range(4):
-            d_layer, d_glayer = tf.split(self.D_out_[i], [self.batch_size, self.batch_size], axis=0)
-            f_match += tf.reduce_mean(tf.multiply(tf.subtract(d_layer, d_glayer)，tf.subtract(d_layer, d_glayer)))
-        if self.model=='WGAN-GP':
-            self.g_loss = tf.reduce_mean(self.D_logits_f[:,-1]) + f_match*0.01*self.flag2
-            disc_cost = -tf.reduce_mean(self.D_logits_f[:,-1]) + tf.reduce_mean(self.D_logits[:,-1])
+            f_match += tf.reduce_mean(tf.multiply(layer_out_f[i]-layer_out_r[i], layer_out_f[i]-layer_out_r[i]))
 
-            alpha = tf.random_uniform(shape=[self.batch_size, 1], minval=0., maxval=1.)
-            differences = self.G_img - ximg
-            differences = tf.reshape(differences, (self.batch_size, self.img_size**2*self.dim))
-            interpolates = ximg + tf.reshape((alpha * differences), (self.batch_size, self.img_size, self.img_size, self.dim))
-            D_logits, _ = self.discriminator('dis', interpolates, reuse=True)
-            gradients = tf.gradients(D_logits[:,-1], [interpolates])[0]
-            slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1]))
-            gradient_penalty = tf.reduce_mean((slopes - 1.) ** 2)
-            self.d_l_1, self.d_l_2, self.d_l_3 = disc_cost + self.LAMBDA * gradient_penalty, self.flag*s_l, (1-self.flag)*un_s
-            # self.d_loss = (disc_cost + self.LAMBDA * gradient_penalty) + d_regular + self.flag*s_l + (1-self.flag)*un_s
-            self.d_loss = 0.1*self.d_l_1 + self.d_l_2 + self.d_l_3 + d_regular
-        elif self.model=='DCGAN':
-            #self.d_loss_real = tf.losses.softmax_cross_entropy(onehot_labels=batchl_*0.9, logits=self.D_logits)
-            #self.d_loss_fake = tf.losses.softmax_cross_entropy(onehot_labels=batch_gl*0.9, logits=self.D_logits_f)
-            self.d_loss_real = -tf.log(tf.reduce_sum(s_logits_[:self.batch_size, :-1])/tf.reduce_sum(s_logits_[:self.batch_size, :]))
-            self.d_loss_fake = -tf.log(tf.reduce_sum(s_logits_[self.batch_size:, -1])/tf.reduce_sum(s_logits_[self.batch_size:, :]))
-            self.g_loss = self.d_loss_fake + f_match*0.01*self.flag2
-            self.d_l_1, self.d_l_2, self.d_l_3 = self.d_loss_fake + self.d_loss_real, self.flag*s_l, (1-self.flag)*un_s
-            self.d_loss = self.d_l_1 + self.d_l_2 + self.d_l_3
-        else:
-            print 'model must be DCGAN or WGAN-GP!'
-            return
+        # caculate the supervised loss
+        s_label = tf.concat([self.label, tf.zeros(shape=(self.batch_size,1))], axis=1)
+        s_l_r = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=s_label*0.9, logits=d_logits_r))
+        s_l_f = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=un_label_f*0.9, logits=d_logits_f))  # same as d_loss_f
+        self.d_l_1, self.d_l_2 = d_loss_r + d_loss_f, s_l_r
+        self.d_loss = d_loss_r + d_loss_f + s_l_r*self.flag*10 + d_regular
+        self.g_loss = d_loss_f + 0.01*f_match
+
         all_vars = tf.global_variables()
         g_vars = [v for v in all_vars if 'gen' in v.name]
         d_vars = [v for v in all_vars if 'dis' in v.name]
-
+        for v in all_vars:
+            print v
         if self.model == 'DCGAN':
             self.opt_d = tf.train.AdamOptimizer(self.lr, beta1=self.mm).minimize(self.d_loss, var_list=d_vars)
             self.opt_g = tf.train.AdamOptimizer(self.lr, beta1=self.mm).minimize(self.g_loss, var_list=g_vars)
@@ -108,16 +82,16 @@ class Train(object):
         else:
             print ('model can only be "DCGAN","WGAN_GP" !')
             return
+        # test
         test_logits, _ = self.discriminator('dis', self.x, reuse=True)
         test_logits = tf.nn.softmax(test_logits)
         temp = tf.reshape(test_logits[:, -1],shape=[self.batch_size, 1])
         for i in range(10):
             temp = tf.concat([temp, tf.reshape(test_logits[:, -1],shape=[self.batch_size, 1])], axis=1)
         test_logits -= temp
-        self.prediction = tf.nn.in_top_k(test_logits, tf.argmax(batchl_, axis=1), 1)
+        self.prediction = tf.nn.in_top_k(test_logits, tf.argmax(s_label, axis=1), 1)
 
         self.saver = tf.train.Saver()
-
         if not self.load_model:
             init = tf.global_variables_initializer()
             self.sess.run(init)
@@ -131,38 +105,32 @@ class Train(object):
             os.mkdir('model_saved')
         if not os.path.exists('gen_picture'):
             os.mkdir('gen_picture')
-        data_dir = os.getcwd() + '/64_crop'
-        # '/home/liu/Tensorflow/GAN~/dcgan/64_crop'
         noise = np.random.normal(-1, 1, [self.batch_size, 128])
-        temp = 0.89
+        temp = 0.80
+        print 'training'
         for epoch in range(self.EPOCH):
             # iters = int(156191//self.batch_size)
-            iters = 500
+            iters = 50000//self.batch_size
             flag2 = 1  # if epoch>10 else 0
             for idx in range(iters):
                 start_t = time.time()
-                flag = 1 if idx<args.label_num else 0 # set we use 500 train data with label.
+                flag = 1 if idx < 4 else 0 # set we use 2*batch_size=200 train data labeled.
                 batchx, batchl = mnist.train.next_batch(self.batch_size)
                 # batchx, batchl = self.sess.run([batchx, batchl])
                 g_opt = [self.opt_g, self.g_loss]
-                d_opt = [self.opt_d, self.d_loss, self.d_l_1, self.d_l_2, self.d_l_3]
+                d_opt = [self.opt_d, self.d_loss, self.d_l_1, self.d_l_2]
                 feed = {self.x:batchx, self.z:noise, self.label:batchl, self.flag:flag, self.flag2:flag2}
                 # update the Discrimater k times
-                # for i in range(4):
-                # _ = self.sess.run(self.opt_d, feed_dict=feed)
-                _, loss_d, d1,d2,d3 = self.sess.run(d_opt, feed_dict=feed)
+                _, loss_d, d1,d2 = self.sess.run(d_opt, feed_dict=feed)
                 # update the Generator one time
                 _, loss_g = self.sess.run(g_opt, feed_dict=feed)
-
-                print ("[%3f][epoch:%2d/%2d][iter:%4d/%4d],loss_d:%5f,loss_g:%4f, d1:%4f, d2:%4f, d3:%4f"%
-                       (time.time()-start_t, epoch, self.EPOCH,idx,iters, loss_d, loss_g,d1,d2,d3 )), 'flag:',flag
-
+                print ("[%3f][epoch:%2d/%2d][iter:%4d/%4d],loss_d:%5f,loss_g:%4f, d1:%4f, d2:%4f"%
+                       (time.time()-start_t, epoch, self.EPOCH,idx,iters, loss_d, loss_g,d1,d2)), 'flag:',flag
                 plot.plot('d_loss', loss_d)
                 plot.plot('g_loss', loss_g)
                 if ((idx+1) % 100) == 0:  # flush plot picture per 1000 iters
                     plot.flush()
                 plot.tick()
-
                 if (idx+1)%500==0:
                     print ('images saving............')
                     img = self.sess.run(self.G_img, feed_dict=feed)
