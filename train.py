@@ -67,7 +67,7 @@ class Train(object):
         s_l_r = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=s_label*0.9, logits=d_logits_r))
         s_l_f = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=un_label_f*0.9, logits=d_logits_f))  # same as d_loss_f
         self.d_l_1, self.d_l_2 = d_loss_r - d_loss_f, s_l_r
-        self.d_loss = d_loss_r - d_loss_f + s_l_r*self.flag*10 + d_regular
+        self.d_loss = -d_loss_r + d_loss_f + s_l_r*self.flag*10 + d_regular
         self.g_loss = d_loss_f + 0.01*f_match
 
         all_vars = tf.global_variables()
