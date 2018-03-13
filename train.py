@@ -54,7 +54,7 @@ class Train(object):
         # d_loss_r = -tf.log(tf.reduce_sum(logits_r[:, :-1])/tf.reduce_sum(logits_r[:,:]))
         # d_loss_f = -tf.log(tf.reduce_sum(logits_f[:, -1])/tf.reduce_sum(logits_f[:,:]))
         d_loss_r = -tf.reduce_mean(tf.log((tf.reduce_sum(d_logits_r, axis=-1) - d_logits_r[:, -1])/tf.reduce_sum(d_logits_r,axis=-1))
-        d_loss_f = -tf.reduce_mean(tf.log((d_logits_f[:, -1])/tf.reduce_sum(d_logits_r,axis=-1))
+        d_loss_f = -tf.reduce_mean(tf.log((d_logits_f[:, -1])/tf.reduce_sum(d_logits_f,axis=-1))
         # d_loss_r = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=un_label_r*0.9, logits=d_logits_r))
         # d_loss_f = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=un_label_f*0.9, logits=d_logits_f))
         # feature match
